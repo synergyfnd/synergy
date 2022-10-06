@@ -19,6 +19,10 @@ pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
+  use frame_support::dispatch::{DispatchError};
+  use frame_support::sp_runtime::print;
+  use frame_support::sp_std::vec;
+
 	#[pallet::pallet]
 	#[pallet::generate_store(pub(super) trait Store)]
 	pub struct Pallet<T>(_);
@@ -65,6 +69,7 @@ pub mod pallet {
 		/// An example dispatchable that takes a singles value as a parameter, writes the value to
 		/// storage and emits an event. This function must be dispatched by a signed extrinsic.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1).ref_time())]
+
 		pub fn do_something(origin: OriginFor<T>, something: u32) -> DispatchResult {
 			// Check that the extrinsic was signed and get the signer.
 			// This function will return an error if the extrinsic is not signed.
@@ -73,6 +78,57 @@ pub mod pallet {
 
 			// Update storage.
 			<Something<T>>::put(something);
+
+			//     let wat = r#"
+			//     (module
+			//   (import "" "" (func $host_hello (param i32)))
+
+			//   (func (export "hello")
+			// i32.const 3
+			// call $host_hello)
+			//     )
+			// "#;
+			//     let wasm = wat::parse_str(&wat)
+			//   .map_err(|_| { DispatchError::Other("Contract parse failed") })?;
+			let wasm = vec![0u8, 0u8, 0u8, 0u8];
+
+			let engine = wasmi::Engine::default();
+			let module = wasmi::Module::new(&engine, &wasm[..])
+				.map_err(|_| { DispatchError::Other("Contract engine setup failed") })?;
+
+			// All wasm objects operate within the context of a "store". Each
+			// `Store` has a type parameter to store host-specific data, which in
+			// this case we're using `42` for.
+			type HostState = u32;
+			let mut store = wasmi::Store::new(&engine, 42);
+
+			let host_hello = wasmi::Func::wrap(&mut store, |caller: wasmi::Caller<'_, HostState>, param: i32| {
+				print("Got returned value from WebAssembly");
+				print(param as u32);
+				print("My host state is:");
+				print(caller.host_data());
+			});
+
+			// In order to create Wasm module instances and link their imports
+			// and exports we require a `Linker`.
+			let mut linker = <wasmi::Linker<HostState>>::new();
+			linker.define("host", "hello", host_hello)
+				.map_err(|_| { DispatchError::Other("Linker setup failed") })?;
+			let instance = linker
+				.instantiate(&mut store, &module)
+				.map_err(|_| { DispatchError::Other("Linker instantiate failed") })?
+				.start(&mut store)
+				.map_err(|_| { DispatchError::Other("Linker start failed") })?;
+			let hello = instance
+				.get_export(&store, "hello")
+				.and_then(wasmi::Extern::into_func)
+				.ok_or_else(|| DispatchError::Other("could not find function \"hello\""))?
+				.typed::<(), (), _>(&mut store)
+				.map_err(|_| { DispatchError::Other("Instance function setup failed") })?;
+
+			// And finally we can call the wasm as if it were a Rust function!
+			hello.call(&mut store, ())
+  .map_err(|_trap| DispatchError::Other("Trapped"))?;
 
 			// Emit an event.
 			Self::deposit_event(Event::SomethingStored(something, who));
